@@ -1,3 +1,5 @@
+const gameStates = require("./gameStates.js");
+const courrier = require("./courrier.js");
 var {colors} = require('../cards');
 var {cards} = require('../cards');
 const { Client } = require('pg');
@@ -20,6 +22,7 @@ var port = process.env.PORT || 3000;
 app.use("/css", express.static(path.resolve(__dirname + '/../css/')));
 app.use("/static", express.static(path.resolve(__dirname + '/../static/')));
 app.use("/src", express.static('./src/'));
+app.use("/dist", express.static(path.resolve(__dirname + '/../dist/')));
 //Host the main page
 app.get('/', function(req, res){
   res.sendFile(path.resolve(__dirname + ('/../index.html')));
@@ -31,9 +34,9 @@ io.on('connection', function(socket) {
     console.log('a user connected');
     socket.on('refreshCookie', function(data) {
         socket.join('lobby');
-        socket.emit("cookify", { 
+        socket.emit(courrier.cookify, { 
             cookie: setCookie(data),
-            gameState: "lobby",
+            gameState: gameStates.mainLobby,
             availableGames: publicInstances
         });
     });
@@ -42,9 +45,9 @@ io.on('connection', function(socket) {
 
         const values = [data.username];
         socket.join('lobby');
-        socket.emit("cookify", {
+        socket.emit(courrier.cookify, {
             cookie: setCookie(values[0]),
-            gameState: "lobby",
+            gameState: gameStates.mainLobby,
             availableGames: publicInstances
         });
     });
@@ -54,19 +57,32 @@ io.on('connection', function(socket) {
         let deck = shuffle(selectCards.slice());
         let creator = data.creator;
         let players = [];
-        players.push({ name: creator, ready: false });
+        let maxPlayers = data.players;
         let played = [];
+        let points = [0];
+        let ready = 0;
+        if (data.name === "p555test") {
+            players.push({ name: 'B-9', ready: true});
+            played.push(deck.splice(0, 8));
+            points.push(0);
+            players.push({ name: 'The Iron Giant', ready: true});
+            played.push(deck.splice(0, 8));
+            points.push(0);
+            ready = 2;
+            maxPlayers = 3;
+        }
         played.push([]);
+        players.push({ name: creator, ready: false });
         let newInstance = {
             creator: data.creator,
             name: data.name,
-            maxPlayers: data.players,
+            maxPlayers: maxPlayers,
             id: gameId,
             deck: deck,
             players: players,
-            ready: 0,
-            points: [0],
-            gameState: "prestart",
+            ready: ready,
+            points: points,
+            gameState: gameStates.preGameLobby,
             played: played,
             numDiscarded: 0,
             spaces: Array(7).fill(null),
@@ -78,17 +94,17 @@ io.on('connection', function(socket) {
             creator: data.creator,
             name: data.name,
             maxPlayers: data.players,
-            currentPlayers: 1,
+            currentPlayers: players.length,
             id: gameId
         };
         gameInstances[id] = newInstance;
         publicInstances.push(newPublicInstance);
-        io.to('lobby').emit("newroom", {
+        io.to('lobby').emit(courrier.newRoom, {
             availableGames: publicInstances
         });
         socket.leave('lobby');
         socket.join('' + gameId);
-        socket.emit('userjoined', {
+        socket.emit(courrier.userJoined, {
             selectCards: deck.splice(0, 8),
             gameState: newInstance.gameState,
             players: newInstance.players,
@@ -113,14 +129,14 @@ io.on('connection', function(socket) {
             for (let i = 0; i < publicInstances.length; i++) {
                 if (publicInstances[i].id === data.id) {
                     publicInstances.splice(i, 1);
-                    io.to('lobby').emit('newroom', {
+                    io.to('lobby').emit(courrier.newRoom, {
                         availableGames: publicInstances
                     })
                 }
             }
         }
         gameInstances[data.id] = joinedInstance;
-        socket.emit('userjoined', {
+        socket.emit(courrier.userJoined, {
             selectCards: joinedInstance.deck.splice(0,8),
             gameState: joinedInstance.gameState,
             id: joinedInstance.id,
@@ -149,7 +165,7 @@ io.on('connection', function(socket) {
             if (instance.players[i].name === data.user) {
                 instance.players[i].ready = true;
                 gameInstances[data.id] = instance;
-                io.to('' + data.id).emit("userready", {
+                io.to('' + data.id).emit(courrier.userReadied, {
                     players: instance.players
                 });
                 break;
@@ -159,12 +175,12 @@ io.on('connection', function(socket) {
             for (let i = 0; i < publicInstances.length; i++) {
                 if (publicInstances[i].id === data.id) {
                     publicInstances.splice(i, 1);
-                    io.to('lobby').emit('newroom', {
+                    io.to('lobby').emit(courrier.newRoom, {
                         availableGames: publicInstances
                     })
                 }
             }
-            instance.gameState = "discardphase";
+            instance.gameState = gameStates.initialDiscard;
             gameInstances[data.id] = instance;
             io.to('' + data.id).emit('discardphase', {
                 spaces: instance.spaces,
@@ -201,20 +217,20 @@ io.on('connection', function(socket) {
     });
     socket.on('nextPhase', function(data) {
         let instance = gameInstances[data.id];
-        if (instance.gameState === 'hasteCheck') {
-            instance.gameState = "boardChange";
-        } else if (instance.gameState === 'playCards' || instance.gameState === 'reflexed') {
+        if (instance.gameState === gameStates.hasteCheck) {
+            instance.gameState = gameStates.swapBoard;
+        } else if (instance.gameState === 'playCards' || instance.gameState === gameStates.reflexed) {
             instance.turn++;
             if (instance.turn === instance.players.length * 8) {
                 instance.currentPlayer = null;
                 instance.gameState = "gameover";
             } else {
                 instance.currentPlayer = ((instance.currentPlayer + 1) % instance.players.length);
-                instance.gameState = "hasteCheck";
+                instance.gameState = gameStates.hasteCheck;
             }
         }
         gameInstances[data.id] = instance;
-        io.to('' + data.id).emit('nextTurn', {
+        io.to('' + data.id).emit(courrier.nextPlayer, {
             gameState: instance.gameState,
             currentPlayer: instance.currentPlayer
         });
@@ -226,7 +242,7 @@ io.on('connection', function(socket) {
         if (instance.gameState === "setup") {
             instance.currentPlayer = ((instance.currentPlayer + 1) % instance.players.length);
             if (!instance.spaces.includes(null)) {
-                instance.gameState = "hasteCheck";
+                instance.gameState = gameStates.hasteCheck;
             }
         } else {
             instance.gameState = "playCards";
@@ -243,7 +259,7 @@ io.on('connection', function(socket) {
         let instance = gameInstances[data.id];
         instance.spaces = data.newSpaces;
         instance.colorCounts = data.newCounts;
-        instance.gameState = "boardChange";
+        instance.gameState = gameStates.swapBoard;
         gameInstances[data.id] = instance;
         io.to('' + data.id).emit('boardChange', {  
             spaces: instance.spaces,
@@ -282,17 +298,17 @@ io.on('connection', function(socket) {
             })
         }
         if (interacted.stateEdit === "H") {
-            instance.gameState = 'bonusswap';
+            instance.gameState = gameStates.hasted;
             socket.emit('bonusswap', {
                 gameState: instance.gameState
             });
         } else if (interacted.stateEdit === "R") {
-            instance.gameState = 'reflexed';
+            instance.gameState = gameStates.reflexed;
             socket.emit('reflexed', {
                 gameState: instance.gameState
             });
         } else {
-            if (instance.gameState === 'reflexed' && data.reflexused === true) {
+            if (instance.gameState === gameStates.reflexed && data.reflexused === true) {
                 instance.gameState = 'playCards';
             }
         }
@@ -316,12 +332,12 @@ io.on('connection', function(socket) {
             let socket = io.in('' + gameId).connected[client];
             socket.leave('' + gameId);
             socket.join('lobby');
-            socket.emit("lobify", {
-                gameState: "lobby",
+            socket.emit(courrier.returnToLobby, {
+                gameState: gameStates.mainLobby,
                 availableGames: publicInstances
             });
         });
-        io.to('lobby').emit('newroom', {
+        io.to('lobby').emit(courrier.newRoom, {
             availableGames: publicInstances
         });
     });
